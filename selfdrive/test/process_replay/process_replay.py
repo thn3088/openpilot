@@ -282,7 +282,7 @@ CONFIGS = [
     proc_name="locationd",
     pub_sub={
       "cameraOdometry": ["liveLocationKalman"],
-      "sensorEvents": [], "gpsLocationExternal": [], "liveCalibration": [], "carState": [],
+      "sensorEvents": ["testAck"], "gpsLocationExternal": ["testAck"], "liveCalibration": ["testAck"], "carState": ["testAck"],
     },
     ignore=["logMonoTime", "valid"],
     init_callback=get_car_params,
@@ -322,7 +322,7 @@ def replay_process(cfg, lr):
 
 
 def python_replay_process(cfg, lr):
-  sub_sockets = [s for _, sub in cfg.pub_sub.items() for s in sub]
+  sub_sockets = [s for _, sub in cfg.pub_sub.items() for s in sub if s != 'testAck']
   pub_sockets = [s for s in cfg.pub_sub.keys() if s != 'can']
 
   fsm = FakeSubMaster(pub_sockets)
@@ -375,8 +375,8 @@ def python_replay_process(cfg, lr):
     if cfg.should_recv_callback is not None:
       recv_socks, should_recv = cfg.should_recv_callback(msg, CP, cfg, fsm)
     else:
-      recv_socks = [s for s in cfg.pub_sub[msg.which()] if
-                      (fsm.frame + 1) % int(service_list[msg.which()].frequency / service_list[s].frequency) == 0]
+      recv_socks = [s for s in cfg.pub_sub[msg.which()] if s != 'testAck' and
+                      (fsm.frame + 1) % int(service_list[msg.which()].frequency / service_list[s].frequency) == 0 ]
       should_recv = bool(len(recv_socks))
 
     if msg.which() == 'can':
@@ -384,10 +384,11 @@ def python_replay_process(cfg, lr):
     else:
       msg_queue.append(msg.as_builder())
 
-    if should_recv:
+    if should_recv or cfg.proc_name == 'locationd':  # for cpp compatibility
       fsm.update_msgs(0, msg_queue)
       msg_queue = []
 
+    if should_recv:
       recv_cnt = len(recv_socks)
       while recv_cnt > 0:
         m = fpm.wait_for_msg()
@@ -419,11 +420,8 @@ def cpp_replay_process(cfg, lr):
     resp_sockets = cfg.pub_sub[msg.which()] if cfg.should_recv_callback is None else cfg.should_recv_callback(msg)
     for s in resp_sockets:
       response = messaging.recv_one(sockets[s])
-      if response is not None:
+      if response is not None and s != 'testAck':
         log_msgs.append(response)
-
-    if not len(resp_sockets):
-      time.sleep(0.01)  # TODO some kind of communication to continue to next
 
   managed_processes[cfg.proc_name].stop()
   return log_msgs
